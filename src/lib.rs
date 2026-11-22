@@ -124,6 +124,17 @@ impl Terminal {
         })
     }
 
+    /// Keeps the alternate screen's buffer only while a program is on the
+    /// alternate screen, which saves one screen of cells per terminal that does
+    /// not use it. Entering the alternate screen always starts from a blank
+    /// buffer, so output is unchanged. What differs: an anchor placed on the
+    /// alternate screen stops resolving once the screen is left, as soon as it
+    /// is left rather than at the next feed.
+    pub fn with_lazy_alternate_screen(mut self) -> Self {
+        self.engine.set_lazy_alternate();
+        self
+    }
+
     /// Processes text and control sequences, updating the virtual terminal
     /// state. Accepts a string, character, `Input`, or flat sequence of
     /// fragments. Iterators are processed incrementally, with one call
@@ -339,6 +350,47 @@ mod tests {
 
     fn print(ch: char) -> Function<'static> {
         Function::Print(String::from(ch).into())
+    }
+
+    #[test]
+    fn a_lazy_alternate_screen_gives_the_same_screens_and_holds_no_buffer_until_entered() {
+        let script = [
+            "primary one\r\n",
+            "\x1b[?1049hALT-A\x1b[3;4HX",
+            "\x1b[?1049l",
+            "primary two",
+            "\x1b[?1049h\x1b[2JALT-B\x1b[?1049l",
+        ];
+        let mut plain = Terminal::with_scrollback(20, 5, Some(10)).unwrap();
+        let mut lazy = Terminal::with_scrollback(20, 5, Some(10))
+            .unwrap()
+            .with_lazy_alternate_screen();
+        assert_eq!(lazy.engine.alternate_rows(), 1);
+
+        for step in script {
+            plain.feed(step);
+            lazy.feed(step);
+            assert_eq!(lazy.dump(), plain.dump());
+            assert_eq!(lazy.cursor_position(), plain.cursor_position());
+        }
+
+        lazy.feed("\x1b[?1049h");
+        assert_eq!(lazy.engine.alternate_rows(), 5);
+        lazy.feed("\x1b[?1049l");
+        assert_eq!(lazy.engine.alternate_rows(), 1);
+    }
+
+    #[test]
+    fn a_lazy_alternate_screen_follows_a_resize_while_it_is_active() {
+        let mut terminal = Terminal::new(10, 4).unwrap().with_lazy_alternate_screen();
+        terminal.feed("\x1b[?1049hALT");
+        terminal.resize(6, 3);
+        assert_eq!(terminal.size(), (6, 3));
+        assert_eq!(terminal.engine.alternate_rows(), 3);
+        terminal.feed("\x1b[?1049l");
+        terminal.resize(8, 5);
+        terminal.feed("\x1b[?1049h");
+        assert_eq!(terminal.engine.alternate_rows(), 5);
     }
 
     #[test]
