@@ -28,6 +28,8 @@ pub(crate) struct Engine {
     rows: usize,
     primary_buffer: Buffer,
     alternate_buffer: Buffer,
+    // When set, the alternate buffer is a 1x1 placeholder except while the alternate screen is active.
+    lazy_alternate: bool,
     active: ScreenKind,
     scrollback_limit: Option<usize>,
     cursor: Cursor,
@@ -219,6 +221,7 @@ impl Engine {
             rows,
             primary_buffer,
             alternate_buffer,
+            lazy_alternate: false,
             active: ScreenKind::Primary,
             scrollback_limit,
             tabs: Tabs::new(cols),
@@ -246,6 +249,22 @@ impl Engine {
 
     pub fn active_screen_kind(&self) -> ScreenKind {
         self.active
+    }
+
+    #[cfg(test)]
+    pub(crate) fn alternate_rows(&self) -> usize {
+        self.alternate_buffer.visible_rows().len()
+    }
+
+    /// Keeps the alternate screen's buffer only while a program is on the alternate screen. The buffer is built
+    /// afresh on every entry, so nothing the screen held before is lost, but an anchor placed on the alternate
+    /// screen no longer resolves once it is left, and the inactive alternate screen is empty to the caller.
+    pub fn set_lazy_alternate(&mut self) {
+        self.lazy_alternate = true;
+
+        if self.active == ScreenKind::Primary {
+            self.alternate_buffer = Buffer::new(1, 1, Some(0), Pen::default());
+        }
     }
 
     pub fn anchor_at(&mut self, position: Position) -> Option<Anchor> {
@@ -597,6 +616,11 @@ impl Engine {
     fn switch_to_primary_buffer(&mut self, observer: &mut impl Effects) {
         if let ScreenKind::Alternate = self.active {
             self.active = ScreenKind::Primary;
+
+            if self.lazy_alternate {
+                self.alternate_buffer = Buffer::new(1, 1, Some(0), Pen::default());
+            }
+
             observer.dirty(0..self.rows);
         }
     }
